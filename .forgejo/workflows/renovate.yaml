@@ -1,0 +1,153 @@
+name: Renovate Dry Run
+
+on:
+  workflow_dispatch:
+
+enable-openid-connect: true
+
+permissions:
+  contents: read
+
+env:
+  INFISICAL_API_URL: ${{ vars.INFISICAL_API_URL }}
+  INFISICAL_PROJECT_ID: ${{ vars.INFISICAL_PROJECT_ID }}
+  INFISICAL_ENV: ${{ vars.INFISICAL_ENV }}
+  INFISICAL_MACHINE_IDENTITY_ID: ${{ vars.INFISICAL_MACHINE_IDENTITY_ID }}
+  RENOVATE_SECRET_PATH: /renovate
+  RENOVATE_DRY_RUN: full
+  LOG_LEVEL: info
+
+concurrency:
+  group: renovate-forgejo
+  cancel-in-progress: false
+
+jobs:
+  renovate:
+    name: Renovate Forgejo dry run
+    runs-on: personal
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install runtime tools
+        run: |
+          set -euo pipefail
+
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl docker.io
+          docker --version
+          node --version
+
+      - name: Resolve Infisical selectors
+        run: |
+          set -euo pipefail
+
+          infisical_api_url="${INFISICAL_API_URL:-http://infisical.auth.svc.cluster.local:8080}"
+          infisical_project_id="${INFISICAL_PROJECT_ID:-d6d9daf6-28ad-436b-8db5-ccf02ab7c4cc}"
+          infisical_env="${INFISICAL_ENV:-prod}"
+          infisical_machine_identity_id="${INFISICAL_MACHINE_IDENTITY_ID:-3391cc7a-1d47-45b1-914f-027e98c8b3fb}"
+
+          {
+            echo "INFISICAL_API_URL=${infisical_api_url}"
+            echo "INFISICAL_PROJECT_ID=${infisical_project_id}"
+            echo "INFISICAL_ENV=${infisical_env}"
+            echo "INFISICAL_MACHINE_IDENTITY_ID=${infisical_machine_identity_id}"
+          } >> "$GITHUB_ENV"
+
+      - name: Install Infisical CLI
+        run: |
+          set -euo pipefail
+
+          export npm_config_prefix="$RUNNER_TEMP/npm-global"
+          mkdir -p "$npm_config_prefix"
+          npm install --global @infisical/cli@0.43.91
+          echo "$npm_config_prefix/bin" >> "$GITHUB_PATH"
+          export PATH="$npm_config_prefix/bin:$PATH"
+          infisical --version
+
+      - name: Login to Infisical with Forgejo OIDC
+        run: |
+          set -euo pipefail
+
+          : "${INFISICAL_API_URL:?Missing INFISICAL_API_URL}"
+          : "${INFISICAL_MACHINE_IDENTITY_ID:?Missing INFISICAL_MACHINE_IDENTITY_ID}"
+          : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?Missing Forgejo OIDC request token}"
+          : "${ACTIONS_ID_TOKEN_REQUEST_URL:?Missing Forgejo OIDC request URL}"
+
+          oidc_response="$(curl -fsS \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://git.heerlab.com/beasty")"
+          forgejo_jwt="$(node -e 'const fs = require("fs"); const body = JSON.parse(fs.readFileSync(0, "utf8")); process.stdout.write(body.value || "");' <<< "$oidc_response")"
+          : "${forgejo_jwt:?Forgejo OIDC response did not include a token}"
+
+          infisical_token="$(infisical login \
+            --method oidc-auth \
+            --machine-identity-id "$INFISICAL_MACHINE_IDENTITY_ID" \
+            --jwt "$forgejo_jwt" \
+            --domain "$INFISICAL_API_URL" \
+            --plain \
+            --silent)"
+          : "${infisical_token:?Infisical OIDC login returned an empty token}"
+          echo "::add-mask::$infisical_token"
+          {
+            echo "INFISICAL_TOKEN<<EOF"
+            printf '%s\n' "$infisical_token"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Fetch Renovate token
+        run: |
+          set -euo pipefail
+
+          : "${INFISICAL_TOKEN:?Missing short-lived Infisical token from OIDC login}"
+          : "${INFISICAL_API_URL:?Missing INFISICAL_API_URL}"
+          : "${INFISICAL_PROJECT_ID:?Missing INFISICAL_PROJECT_ID}"
+          : "${INFISICAL_ENV:?Missing INFISICAL_ENV}"
+          : "${RENOVATE_SECRET_PATH:?Missing RENOVATE_SECRET_PATH}"
+
+          renovate_token="$(infisical secrets get RENOVATE_TOKEN \
+            --domain "$INFISICAL_API_URL" \
+            --token "$INFISICAL_TOKEN" \
+            --projectId "$INFISICAL_PROJECT_ID" \
+            --env "$INFISICAL_ENV" \
+            --path "$RENOVATE_SECRET_PATH" \
+            --plain \
+            --silent)"
+          : "${renovate_token:?Missing RENOVATE_TOKEN from Infisical}"
+          echo "::add-mask::$renovate_token"
+          {
+            echo "RENOVATE_TOKEN<<EOF"
+            printf '%s\n' "$renovate_token"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Show configured allowlist
+        run: |
+          set -euo pipefail
+
+          node - <<'NODE'
+          const config = require("./config.js");
+          for (const repo of config.autodiscoverFilter) {
+            console.log(`Renovate allowlist: ${repo}`);
+          }
+          NODE
+
+      - name: Run Renovate dry run
+        run: |
+          set -euo pipefail
+
+          : "${RENOVATE_TOKEN:?Missing RENOVATE_TOKEN}"
+          : "${RENOVATE_DRY_RUN:?Missing RENOVATE_DRY_RUN}"
+
+          renovate_config="$(node -e 'process.stdout.write(JSON.stringify(require("./config.js")))')"
+
+          docker run --rm \
+            -e LOG_LEVEL \
+            -e RENOVATE_DRY_RUN \
+            -e RENOVATE_TOKEN \
+            -e RENOVATE_CONFIG="$renovate_config" \
+            renovate/renovate:latest
