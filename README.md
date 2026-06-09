@@ -61,6 +61,9 @@ Forgejo autodiscovery, and an explicit allowlist:
 runner/config repository. The real access boundary is the `renovate-bot`
 collaborator list; grant it write access only to the allowlisted repositories.
 
+Hourly and concurrent Renovate PR limits are disabled in the global runner
+config so Forgejo can open the same backlog style as the previous GitHub setup.
+
 The workflow logs into Infisical with Forgejo OIDC, fetches `RENOVATE_TOKEN`,
 optionally fetches `RENOVATE_GITHUB_COM_TOKEN`, then runs
 `renovate/renovate:latest`. Scheduled runs are real runs. Manual dispatches are

@@ -19,5 +19,8 @@ module.exports = {
     $schema: "https://docs.renovatebot.com/renovate-schema.json",
     extends: ["config:recommended"],
   },
+  commitHourlyLimit: 0,
+  prHourlyLimit: 0,
+  prConcurrentLimit: 0,
   gitAuthor: "Renovate Bot <renovate-bot@heerlab.com>",
 };
