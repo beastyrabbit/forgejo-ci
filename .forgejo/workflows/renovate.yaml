@@ -1,7 +1,15 @@
-name: Renovate Dry Run
+name: Renovate
 
 on:
+  schedule:
+    - cron: '30 5 * * *'
+      timezone: Europe/Berlin
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run without creating or updating PRs.
+        type: boolean
+        default: true
 
 enable-openid-connect: true
 
@@ -14,7 +22,6 @@ env:
   INFISICAL_ENV: ${{ vars.INFISICAL_ENV }}
   INFISICAL_MACHINE_IDENTITY_ID: ${{ vars.INFISICAL_MACHINE_IDENTITY_ID }}
   RENOVATE_SECRET_PATH: /renovate
-  RENOVATE_DRY_RUN: full
   LOG_LEVEL: info
 
 concurrency:
@@ -23,7 +30,7 @@ concurrency:
 
 jobs:
   renovate:
-    name: Renovate Forgejo dry run
+    name: Renovate Forgejo
     runs-on: personal
     timeout-minutes: 60
     defaults:
@@ -125,6 +132,54 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_ENV"
 
+      - name: Fetch optional GitHub.com token
+        run: |
+          set -euo pipefail
+
+          : "${INFISICAL_TOKEN:?Missing short-lived Infisical token from OIDC login}"
+          : "${INFISICAL_API_URL:?Missing INFISICAL_API_URL}"
+          : "${INFISICAL_PROJECT_ID:?Missing INFISICAL_PROJECT_ID}"
+          : "${INFISICAL_ENV:?Missing INFISICAL_ENV}"
+          : "${RENOVATE_SECRET_PATH:?Missing RENOVATE_SECRET_PATH}"
+
+          if github_token="$(infisical secrets get RENOVATE_GITHUB_COM_TOKEN \
+            --domain "$INFISICAL_API_URL" \
+            --token "$INFISICAL_TOKEN" \
+            --projectId "$INFISICAL_PROJECT_ID" \
+            --env "$INFISICAL_ENV" \
+            --path "$RENOVATE_SECRET_PATH" \
+            --plain \
+            --silent 2>/dev/null)" && [[ -n "$github_token" ]]; then
+            echo "::add-mask::$github_token"
+            {
+              echo "GITHUB_COM_TOKEN<<EOF"
+              printf '%s\n' "$github_token"
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+            echo "Using GitHub.com token from Infisical for Renovate lookups."
+          else
+            echo "Optional RENOVATE_GITHUB_COM_TOKEN is not configured; continuing without it."
+          fi
+
+      - name: Resolve Renovate mode
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            renovate_dry_run=""
+          elif [[ "${{ inputs.dry_run }}" == "false" ]]; then
+            renovate_dry_run=""
+          else
+            renovate_dry_run="full"
+          fi
+
+          if [[ "$renovate_dry_run" == "full" ]]; then
+            echo "RENOVATE_DRY_RUN=full" >> "$GITHUB_ENV"
+            echo "Renovate mode: dry-run"
+          else
+            echo "Renovate mode: real run"
+          fi
+
       - name: Show configured allowlist
         run: |
           set -euo pipefail
@@ -136,18 +191,28 @@ jobs:
           }
           NODE
 
-      - name: Run Renovate dry run
+      - name: Run Renovate
         run: |
           set -euo pipefail
 
           : "${RENOVATE_TOKEN:?Missing RENOVATE_TOKEN}"
-          : "${RENOVATE_DRY_RUN:?Missing RENOVATE_DRY_RUN}"
 
           renovate_config="$(node -e 'process.stdout.write(JSON.stringify(require("./config.js")))')"
 
+          docker_env_args=(
+            -e LOG_LEVEL
+            -e RENOVATE_TOKEN
+            -e RENOVATE_CONFIG="$renovate_config"
+          )
+
+          if [[ -n "${RENOVATE_DRY_RUN:-}" ]]; then
+            docker_env_args+=(-e RENOVATE_DRY_RUN)
+          fi
+
+          if [[ -n "${GITHUB_COM_TOKEN:-}" ]]; then
+            docker_env_args+=(-e GITHUB_COM_TOKEN)
+          fi
+
           docker run --rm \
-            -e LOG_LEVEL \
-            -e RENOVATE_DRY_RUN \
-            -e RENOVATE_TOKEN \
-            -e RENOVATE_CONFIG="$renovate_config" \
+            "${docker_env_args[@]}" \
             renovate/renovate:latest

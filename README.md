@@ -13,11 +13,18 @@ Infisical project `Forgejo CI`, environment `prod`.
 ## Renovate
 
 `renovate.yaml` runs self-hosted Renovate for Forgejo through the personal
-Forgejo Actions runner pool. The first workflow stage is manual dry-run only:
+Forgejo Actions runner pool. It runs daily at `05:30 Europe/Berlin`. Manual
+dispatch defaults to dry-run mode:
 
 ```bash
-fj actions dispatch -r beasty/forgejo-ci renovate.yaml main
+fj actions dispatch -r beasty/forgejo-ci -I dry_run=true renovate.yaml main
 fj actions tasks -r beasty/forgejo-ci
+```
+
+To run Renovate for real from a manual dispatch:
+
+```bash
+fj actions dispatch -r beasty/forgejo-ci -I dry_run=false renovate.yaml main
 ```
 
 Renovate uses the dedicated Forgejo user `renovate-bot`:
@@ -34,6 +41,7 @@ The token value is stored only in Infisical:
 - environment: `prod`
 - path: `/renovate`
 - secret: `RENOVATE_TOKEN`
+- optional GitHub.com lookup token: `RENOVATE_GITHUB_COM_TOKEN`
 
 Do not store `RENOVATE_TOKEN` in Forgejo secrets, runner environment variables,
 Kubernetes Secrets, `kub-homelab`, or this repository.
@@ -54,20 +62,8 @@ runner/config repository. The real access boundary is the `renovate-bot`
 collaborator list; grant it write access only to the allowlisted repositories.
 
 The workflow logs into Infisical with Forgejo OIDC, fetches `RENOVATE_TOKEN`,
-then runs `renovate/renovate:latest` with `RENOVATE_DRY_RUN=full`. Dry-run logs
-may show onboarding PRs that would be created, but this stage must not create or
-update PRs.
-
-After a clean dry-run, enable the scheduled real run in a follow-up change. Use
-a Berlin-local schedule outside DST transition hours, for example:
-
-```yaml
-on:
-  schedule:
-    - cron: '30 5 * * *'
-      timezone: Europe/Berlin
-  workflow_dispatch:
-```
-
-Keep manual dispatch available for future dry-run debugging when the scheduled
-workflow is added.
+optionally fetches `RENOVATE_GITHUB_COM_TOKEN`, then runs
+`renovate/renovate:latest`. Scheduled runs are real runs. Manual dispatches are
+dry-runs unless `dry_run=false` is supplied. Dry-run logs may show onboarding
+PRs or dependency branches that would be created, but dry-run mode must not
+create or update PRs.
