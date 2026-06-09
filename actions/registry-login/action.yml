@@ -1,0 +1,80 @@
+name: Forgejo registry login
+description: Log in to the Heerlab Forgejo container/package registry using the central Forgejo CI Infisical token.
+
+inputs:
+  registry:
+    description: Forgejo registry host.
+    required: false
+    default: git.heerlab.com
+  username:
+    description: Forgejo registry username.
+    required: false
+    default: beasty
+
+runs:
+  using: composite
+  steps:
+    - name: Log in to Forgejo registry
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        REGISTRY_USERNAME: ${{ inputs.username }}
+      run: |
+        set -euo pipefail
+
+        infisical_api_url="http://infisical.auth.svc.cluster.local:8080"
+        infisical_env="prod"
+        infisical_machine_identity_id="3391cc7a-1d47-45b1-914f-027e98c8b3fb"
+        forgejo_ci_project_id="d6d9daf6-28ad-436b-8db5-ccf02ab7c4cc"
+        registry_secret_path="/registry"
+
+        : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?Missing Forgejo OIDC request token}"
+        : "${ACTIONS_ID_TOKEN_REQUEST_URL:?Missing Forgejo OIDC request URL}"
+
+        if ! command -v curl >/dev/null 2>&1; then
+          echo "curl is required before running this action" >&2
+          exit 1
+        fi
+
+        if ! command -v docker >/dev/null 2>&1; then
+          echo "docker CLI is required before running this action" >&2
+          exit 1
+        fi
+
+        if command -v infisical >/dev/null 2>&1; then
+          infisical_bin="infisical"
+        else
+          export npm_config_prefix="$RUNNER_TEMP/npm-global"
+          mkdir -p "$npm_config_prefix"
+          npm install --global @infisical/cli@0.43.91
+          infisical_bin="$npm_config_prefix/bin/infisical"
+        fi
+
+        oidc_response="$(curl -fsS \
+          -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://git.heerlab.com/beasty")"
+        forgejo_jwt="$(node -e 'const fs = require("fs"); const body = JSON.parse(fs.readFileSync(0, "utf8")); process.stdout.write(body.value || "");' <<< "$oidc_response")"
+        : "${forgejo_jwt:?Forgejo OIDC response did not include a token}"
+
+        infisical_token="$("$infisical_bin" login \
+          --method oidc-auth \
+          --machine-identity-id "$infisical_machine_identity_id" \
+          --jwt "$forgejo_jwt" \
+          --domain "$infisical_api_url" \
+          --plain \
+          --silent)"
+        : "${infisical_token:?Infisical OIDC login returned an empty token}"
+        echo "::add-mask::$infisical_token"
+
+        package_token="$("$infisical_bin" secrets get FORGEJO_PACKAGE_TOKEN \
+          --domain "$infisical_api_url" \
+          --token "$infisical_token" \
+          --projectId "$forgejo_ci_project_id" \
+          --env "$infisical_env" \
+          --path "$registry_secret_path" \
+          --plain \
+          --silent)"
+        : "${package_token:?Missing FORGEJO_PACKAGE_TOKEN in Forgejo CI Infisical project}"
+        echo "::add-mask::$package_token"
+        printf '%s' "$package_token" | docker login "$REGISTRY" --username "$REGISTRY_USERNAME" --password-stdin
+
