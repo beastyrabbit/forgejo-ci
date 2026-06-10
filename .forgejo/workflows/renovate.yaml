@@ -90,6 +90,27 @@ jobs:
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://git.heerlab.com/beasty")"
           forgejo_jwt="$(node -e 'const fs = require("fs"); const body = JSON.parse(fs.readFileSync(0, "utf8")); process.stdout.write(body.value || "");' <<< "$oidc_response")"
           : "${forgejo_jwt:?Forgejo OIDC response did not include a token}"
+          echo "::add-mask::$forgejo_jwt"
+
+          node - "$forgejo_jwt" <<'NODE'
+          const token = process.argv[2];
+          const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+          const safeClaims = {
+            iss: payload.iss,
+            aud: payload.aud,
+            sub: payload.sub,
+            repository: payload.repository,
+            repository_owner: payload.repository_owner,
+            ref: payload.ref,
+            event_name: payload.event_name,
+            workflow_ref: payload.workflow_ref,
+          };
+          for (const [key, value] of Object.entries(safeClaims)) {
+            if (value !== undefined && value !== "") {
+              console.log(`Forgejo OIDC ${key}: ${value}`);
+            }
+          }
+          NODE
 
           infisical_token="$(infisical login \
             --method oidc-auth \
@@ -165,7 +186,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+          event_name="${GITHUB_EVENT_NAME:-${FORGEJO_EVENT_NAME:-}}"
+          event_path="${GITHUB_EVENT_PATH:-${FORGEJO_EVENT_PATH:-}}"
+          event_action=""
+
+          if [[ -n "$event_path" && -f "$event_path" ]]; then
+            event_action="$(node -e 'const fs = require("fs"); const event = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); process.stdout.write(event.action || "");' "$event_path")"
+          fi
+
+          if [[ "$event_name" == "schedule" || "$event_action" == "schedule" ]]; then
             renovate_dry_run=""
           elif [[ "${{ inputs.dry_run }}" == "false" ]]; then
             renovate_dry_run=""
