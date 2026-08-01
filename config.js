@@ -4,6 +4,7 @@ const allowedRepositories = [
   "beasty/beastypage",
   "beasty/beasty_printer_hub",
   "beasty/infinitune",
+  "beasty/inbox-walk",
   "beasty/moddrop",
   "beasty/tussel",
 ];
