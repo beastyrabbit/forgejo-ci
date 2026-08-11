@@ -1,0 +1,39 @@
+name: Verify registry login
+
+on:
+  workflow_dispatch:
+
+enable-openid-connect: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: personal
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install registry clients
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl docker.io
+
+      - name: Configure Forgejo registries
+        uses: ./actions/registry-login
+        with:
+          npm-owner: beasty
+
+      - name: Verify protected npm configuration
+        run: |
+          set -euo pipefail
+          [[ -f "$NPM_CONFIG_USERCONFIG" ]]
+          [[ "$(stat -c '%a' "$NPM_CONFIG_USERCONFIG")" == "600" ]]
+          npm whoami --registry "$FORGEJO_NPM_REGISTRY" >/dev/null
