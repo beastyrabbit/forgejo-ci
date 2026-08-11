@@ -8,7 +8,9 @@ Infisical project `Forgejo CI`, environment `prod`.
 ## Actions
 
 - `actions/registry-login`: logs in to `git.heerlab.com` with the shared
-  `FORGEJO_PACKAGE_TOKEN` fetched through Forgejo OIDC from Infisical.
+  `FORGEJO_PACKAGE_TOKEN` fetched through Forgejo OIDC from Infisical. Set its
+  optional `npm-owner` input to configure a protected temporary npmrc and the
+  `FORGEJO_NPM_REGISTRY` environment variable for later package-publish steps.
 
 ## Renovate
 

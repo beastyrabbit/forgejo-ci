@@ -10,6 +10,10 @@ inputs:
     description: Forgejo registry username.
     required: false
     default: beasty
+  npm-owner:
+    description: Optional Forgejo package owner whose npm registry should be configured for later steps.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -17,6 +21,7 @@ runs:
     - name: Log in to Forgejo registry
       shell: bash
       env:
+        NPM_OWNER: ${{ inputs.npm-owner }}
         REGISTRY: ${{ inputs.registry }}
         REGISTRY_USERNAME: ${{ inputs.username }}
       run: |
@@ -78,3 +83,17 @@ runs:
         echo "::add-mask::$package_token"
         printf '%s' "$package_token" | docker login "$REGISTRY" --username "$REGISTRY_USERNAME" --password-stdin
 
+        if [[ -n "$NPM_OWNER" ]]; then
+          npm_registry="https://${REGISTRY}/api/packages/${NPM_OWNER}/npm/"
+          npmrc_path="$RUNNER_TEMP/forgejo-npmrc"
+          umask 077
+          {
+            printf 'registry=%s\n' "$npm_registry"
+            printf '//%s/api/packages/%s/npm/:_authToken=%s\n' \
+              "$REGISTRY" "$NPM_OWNER" "$package_token"
+          } > "$npmrc_path"
+          {
+            printf 'NPM_CONFIG_USERCONFIG=%s\n' "$npmrc_path"
+            printf 'FORGEJO_NPM_REGISTRY=%s\n' "$npm_registry"
+          } >> "$GITHUB_ENV"
+        fi
